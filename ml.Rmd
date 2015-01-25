@@ -1,0 +1,80 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Vsevolod Velichko"
+date: "23.01.2015"
+output: html_document
+---
+
+Preparation
+===========
+
+I used the pml-training.csv file with the 19622 observations of weight lifting excersises from [1] as input data for training the model. The columns giving no useful information were removed, the other columns (except "classe") were converted to numerics. Highly correlated columns were also removed. Finally the columns with zero variance or NAs present were also removed.
+Then the data was split into training set (60%) and testing set (40%).
+
+For assignment there will be used separate dataset from the pml-testing.csv file, which will undergo the same preparations, but at first is put aside.
+```{r}
+library(caret, quietly=T)
+library(doMC, quietly=T)
+library(randomForest, quietly=T)
+library(MASS, quietly=T)
+registerDoMC(5)
+set.seed(42)
+
+trainingData <- read.csv('/tmp/pml-training.csv', dec='.', na.strings=c("","#DIV/0!"))
+trainingData <- trainingData[, -(1:7)]
+for (i in 1:152) trainingData[, i] <- as.numeric(trainingData[, i])
+zeroVar <- nearZeroVar(trainingData)
+trainingData <- trainingData[, -zeroVar]
+nonNAs <- colSums(is.na(trainingData)) == 0
+trainingData <- trainingData[, nonNAs]
+corCols <- findCorrelation(cor(subset(trainingData, select=-classe)), 0.90)
+trainingData <- trainingData[, -corCols]
+
+inTrain <- createDataPartition(trainingData$classe, p=0.6, list=F)
+validationData <- trainingData[-inTrain,]
+trainingData <- trainingData[inTrain,]
+
+assignmentData <- read.csv('/tmp/pml-testing.csv', dec='.', na.strings=c("","#DIV/0!"))
+assignmentData <- assignmentData[, -(1:7)]
+for (i in 1:152) assignmentData[, i] <- as.numeric(assignmentData[, i])
+assignmentData <- assignmentData[, -zeroVar]
+assignmentData <- assignmentData[, nonNAs]
+assignmentData <- assignmentData[, -corCols]
+```
+
+Model fitting
+=============
+
+Then there were some models fitted. *rpart* and *gbm* methods were unable to fit the model, so they were ignored. At first,  *random forest*:
+```{r}
+td <- subset(trainingData, select=-classe)
+tc <- trainControl("cv", 16)
+mfRf <- randomForest(trainingData$classe ~ ., data=td, replace=F, preProcess="pca", thresh=0.99, trControl=tc)
+cfRf <- confusionMatrix(predict(mfRf, validationData), validationData$classe)
+```
+
+In the same way the model using *LDA* was made.
+```{r}
+mfLda <- train(trainingData$classe ~ ., data=td, method="lda", preProcess="pca", thresh=0.99, replace=F, trControl=tc)
+cfLda <- confusionMatrix(predict(mfLda, validationData), validationData$classe)
+matrix(c(cfRf$overall[["Accuracy"]], cfLda$overall[["Accuracy"]]), nrow=2, ncol=1, dimnames=list(c("random forest", "lda"), c("Accuracy")))
+```
+
+My PC has failed to fit *rpart*, *gbm*, *nb* and *svmRadial* models with any tuning I tried, so I had to consider only these two models.
+Nevertheless, the accuracy of *random forest* fitted model is quite good (>99%), so I refused to try combining models, preferring higher fitting speed.
+
+Results
+=======
+
+The fitted model is very accurate, and cross-validation gives the accuracy `r round(cfRf$overall[["Accuracy"]] * 100, 2)`%, and $\kappa =$ `r round(cfRf$overall[["Kappa"]], 4)`, so it is definitely can be used to predict our assignment set.
+
+```{r}
+assignmentData <- cbind(assignmentData, data.frame(prediction=predict(mfRf, assignmentData)))
+for (problemId in 1:nrow(assignmentData)) {
+  f <- file(paste0("problem_id_", problemId), "wb")
+  writeChar(as.character(assignmentData[problemId, "prediction"]), f)
+  close(f)
+}
+```
+
+[1] http://groupware.les.inf.puc-rio.br/har
